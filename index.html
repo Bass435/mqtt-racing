@@ -183,9 +183,19 @@
                     id="timer-display">00.000s</div>
             </div>
 
+            <!-- Mini-Game UI -->
+            <div id="minigame-ui"
+                class="hidden flex flex-col items-center justify-center bg-gray-900 border border-gray-700 rounded-lg p-4 mb-4">
+                <p class="text-gray-400 text-sm mb-2 uppercase tracking-widest font-bold">PRESS THIS KEY QUICKLY!</p>
+                <div id="target-key"
+                    class="text-6xl text-white bg-blue-600 rounded-xl w-24 h-24 flex items-center justify-center shadow-[0_0_15px_rgba(37,99,235,0.8)] border-2 border-blue-400 transition-transform">
+                    <i class="fa-solid fa-arrow-up"></i>
+                </div>
+            </div>
+
             <div id="instruction"
                 class="text-center text-blue-400 text-sm mb-4 spacebar-instruction hidden font-bold tracking-widest uppercase">
-                MASH THE [SPACEBAR] TO DRIVE!
+                PRESS THE MATCHING ARROW KEY TO DRIVE!
             </div>
 
             <!-- Tracks Container -->
@@ -234,6 +244,7 @@
         const TOPIC_PREFIX = 'oracle-race-game/v1';
         const TOPIC_PLAYERS = `${TOPIC_PREFIX}/players/+`;
         const TOPIC_LEADERBOARD = `${TOPIC_PREFIX}/leaderboard`;
+        const TOPIC_SYNC = `${TOPIC_PREFIX}/sync-start`;
 
         // --- Variables ---
         let client = null;
@@ -270,6 +281,17 @@
         const countdownOverlay = document.getElementById('countdown-overlay');
         const countdownText = document.getElementById('countdown-text');
 
+        const minigameUi = document.getElementById('minigame-ui');
+        const targetKeyDom = document.getElementById('target-key');
+        const arrowKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+        const arrowIcons = {
+            'ArrowUp': 'fa-arrow-up',
+            'ArrowDown': 'fa-arrow-down',
+            'ArrowLeft': 'fa-arrow-left',
+            'ArrowRight': 'fa-arrow-right'
+        };
+        let currentTargetKey = '';
+
         const domRecordHolder = document.getElementById('record-holder');
         const domRecordTime = document.getElementById('record-time');
 
@@ -299,6 +321,7 @@
                 // Subscribe
                 client.subscribe(TOPIC_PLAYERS);
                 client.subscribe(TOPIC_LEADERBOARD);
+                client.subscribe(TOPIC_SYNC);
 
                 // Publish initial presence
                 updateMyState(0, false, 0);
@@ -312,7 +335,10 @@
             client.on('message', (topic, message) => {
                 const payload = JSON.parse(message.toString());
 
-                if (topic === TOPIC_LEADERBOARD) {
+                if (topic === TOPIC_SYNC && gameState !== 'starting' && gameState !== 'playing') {
+                    // Start sync requested by someone
+                    executeStartGame();
+                } else if (topic === TOPIC_LEADERBOARD) {
                     currentRecord = payload;
                     updateLeaderboardUI();
                 } else if (topic.startsWith(`${TOPIC_PREFIX}/players/`)) {
@@ -444,7 +470,26 @@
             }
         }
 
-        function startGame() {
+        function rollNewKey() {
+            // Pick a random arrow
+            currentTargetKey = arrowKeys[Math.floor(Math.random() * arrowKeys.length)];
+            targetKeyDom.innerHTML = `<i class="fa-solid ${arrowIcons[currentTargetKey]}"></i>`;
+
+            // Subtle animation hit
+            targetKeyDom.classList.remove('scale-110');
+            void targetKeyDom.offsetWidth; // Trigger reflow
+            targetKeyDom.classList.add('scale-110');
+            setTimeout(() => targetKeyDom.classList.remove('scale-110'), 100);
+        }
+
+        function triggerSyncStart() {
+            if (client && client.connected) {
+                // Publish sync event so all connected players start together
+                client.publish(TOPIC_SYNC, JSON.stringify({ ts: Date.now() }), { qos: 0 });
+            }
+        }
+
+        function executeStartGame() {
             if (gameState === 'starting') return;
 
             gameState = 'starting';
@@ -475,9 +520,12 @@
 
                     // Actually start
                     gameState = 'playing';
+                    minigameUi.classList.remove('hidden');
                     domInstruction.classList.remove('hidden');
                     domStatus.className = "text-xl font-bold text-green-400";
                     domStatus.innerText = "RACING!";
+
+                    rollNewKey(); // First minigame key
 
                     startTime = Date.now();
 
@@ -499,6 +547,7 @@
             clearInterval(timerInterval);
 
             domTimer.innerText = `${(finishTime / 1000).toFixed(3)}s`;
+            minigameUi.classList.add('hidden');
             domInstruction.classList.add('hidden');
 
             // We don't remove hidden from btnReset here immediately, it is handled in renderTracks()
@@ -515,26 +564,32 @@
             if (e.key === 'Enter') initMQTT();
         });
 
-        btnStart.addEventListener('click', startGame);
-        btnReset.addEventListener('click', startGame);
+        btnStart.addEventListener('click', triggerSyncStart);
+        btnReset.addEventListener('click', triggerSyncStart);
 
         document.addEventListener('keydown', (e) => {
-            if (e.code === 'Space') {
+            if (arrowKeys.includes(e.code) || e.code === 'Space') {
                 // Prevent scrolling
-                if (e.target === document.body || e.target === btnStart || e.target === btnReset) {
-                    e.preventDefault();
-                }
+                e.preventDefault();
 
-                if (gameState === 'playing') {
-                    // Advance progress (1% per click = 100 clicks to win, increased from 40 clicks)
-                    myProgress += 1;
+                if (gameState === 'playing' && e.code === currentTargetKey) {
+                    // Correct key pressed!
+                    // Advance progress (5% per click = 20 correct hits to win)
+                    myProgress += 5;
 
                     if (myProgress >= 100) {
                         myProgress = 100;
                         finishGame();
                     } else {
                         updateMyState(myProgress, false, 0);
+                        rollNewKey(); // Show next key
                     }
+                } else if (gameState === 'playing') {
+                    // Wrong key penalty: brief visual feedback (could expand this later)
+                    targetKeyDom.classList.add('border-red-500', 'bg-red-600', 'shadow-[0_0_15px_rgba(220,38,38,0.8)]');
+                    setTimeout(() => {
+                        targetKeyDom.classList.remove('border-red-500', 'bg-red-600', 'shadow-[0_0_15px_rgba(220,38,38,0.8)]');
+                    }, 200);
                 }
             }
         });
