@@ -35,7 +35,8 @@
             position: absolute;
             left: 0%;
             top: 50%;
-            transform: translateY(-50%);
+            transform: translateY(-50%) scaleX(-1);
+            /* Flip horizontal to face right */
             transition: left 0.1s linear;
             font-size: 2.5rem;
             filter: drop-shadow(2px 4px 6px rgba(0, 0, 0, 0.3));
@@ -162,9 +163,14 @@
                     class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded shadow-lg transition-transform hover:scale-105 active:scale-95">
                     START RACE
                 </button>
+                <div id="countdown-overlay"
+                    class="hidden absolute inset-0 z-50 flex items-center justify-center bg-black/80 rounded-xl">
+                    <span id="countdown-text"
+                        class="text-8xl font-extrabold text-yellow-400 animate-pulse drop-shadow-[0_0_20px_rgba(250,204,21,0.8)]">3</span>
+                </div>
                 <button id="btn-reset"
                     class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-6 rounded shadow-lg transition-transform hover:scale-105 active:scale-95 hidden ml-2">
-                    PLAY AGAIN
+                    PLAY AGAIN (Waiting for all...)
                 </button>
             </div>
         </div>
@@ -261,6 +267,8 @@
         const domTimer = document.getElementById('timer-display');
         const domInstruction = document.getElementById('instruction');
         const tracksWrapper = document.getElementById('tracks-wrapper');
+        const countdownOverlay = document.getElementById('countdown-overlay');
+        const countdownText = document.getElementById('countdown-text');
 
         const domRecordHolder = document.getElementById('record-holder');
         const domRecordTime = document.getElementById('record-time');
@@ -373,12 +381,29 @@
         }
 
         function renderTracks() {
-            // Clean up stale players (inactive for 10s)
+            // Check if everyone is finished to show Reset button
+            let allFinished = true;
+            let totalPlayers = 0;
             const now = Date.now();
             for (let id in players) {
+                totalPlayers++;
                 if (id !== myId && players[id].lastUpdated && (now - players[id].lastUpdated > 10000)) {
                     delete players[id];
+                    totalPlayers--;
+                } else if (!players[id].finished) {
+                    allFinished = false;
                 }
+            }
+
+            // Only show reset button if we are finished AND everyone else is finished (or if we are alone)
+            if (gameState === 'finished' && allFinished) {
+                btnReset.classList.remove('hidden');
+                btnReset.innerText = "PLAY AGAIN";
+                btnReset.disabled = false;
+            } else if (gameState === 'finished') {
+                btnReset.classList.remove('hidden');
+                btnReset.innerText = "WAITING FOR OTHERS...";
+                btnReset.disabled = true;
             }
 
             tracksWrapper.innerHTML = '';
@@ -420,32 +445,52 @@
         }
 
         function startGame() {
-            gameState = 'playing';
+            if (gameState === 'starting') return;
+
+            gameState = 'starting';
             myProgress = 0;
             finishTime = 0;
 
             btnStart.classList.add('hidden');
             btnReset.classList.add('hidden');
-            domInstruction.classList.remove('hidden');
-            domStatus.className = "text-xl font-bold text-green-400";
-            domStatus.innerText = "GO! GO! GO!";
-
-            // Clean up confetti
-            document.querySelectorAll('.confetti').forEach(e => e.remove());
             domRecordHolder.classList.remove('text-green-400');
+            document.querySelectorAll('.confetti').forEach(e => e.remove());
 
             updateMyState(0, false, 0);
 
-            startTime = Date.now();
+            // Countdown Logic
+            countdownOverlay.classList.remove('hidden');
+            let count = 3;
+            countdownText.innerText = count;
 
-            // Timer loop
-            if (timerInterval) clearInterval(timerInterval);
-            timerInterval = setInterval(() => {
-                if (gameState === 'playing') {
-                    const elapsed = Date.now() - startTime;
-                    domTimer.innerText = `${(elapsed / 1000).toFixed(3)}s`;
+            const countInterval = setInterval(() => {
+                count--;
+                if (count > 0) {
+                    countdownText.innerText = count;
+                } else if (count === 0) {
+                    countdownText.innerText = "GO!";
+                } else {
+                    clearInterval(countInterval);
+                    countdownOverlay.classList.add('hidden');
+
+                    // Actually start
+                    gameState = 'playing';
+                    domInstruction.classList.remove('hidden');
+                    domStatus.className = "text-xl font-bold text-green-400";
+                    domStatus.innerText = "RACING!";
+
+                    startTime = Date.now();
+
+                    // Timer loop
+                    if (timerInterval) clearInterval(timerInterval);
+                    timerInterval = setInterval(() => {
+                        if (gameState === 'playing') {
+                            const elapsed = Date.now() - startTime;
+                            domTimer.innerText = `${(elapsed / 1000).toFixed(3)}s`;
+                        }
+                    }, 50);
                 }
-            }, 50);
+            }, 1000);
         }
 
         function finishGame() {
@@ -455,7 +500,8 @@
 
             domTimer.innerText = `${(finishTime / 1000).toFixed(3)}s`;
             domInstruction.classList.add('hidden');
-            btnReset.classList.remove('hidden');
+
+            // We don't remove hidden from btnReset here immediately, it is handled in renderTracks()
 
             updateMyState(100, true, finishTime);
             checkLeaderboard(finishTime);
@@ -480,8 +526,8 @@
                 }
 
                 if (gameState === 'playing') {
-                    // Advance progress (2.5% per click = 40 clicks to win)
-                    myProgress += 2.5;
+                    // Advance progress (1% per click = 100 clicks to win, increased from 40 clicks)
+                    myProgress += 1;
 
                     if (myProgress >= 100) {
                         myProgress = 100;
